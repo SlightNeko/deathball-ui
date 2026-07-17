@@ -37,16 +37,44 @@ local dbCharacter = nil
 local dbRootPart = nil
 
 local function dbFindBall()
+	local best = nil
+	local bestSize = 0
 	for _, child in pairs(Workspace:GetChildren()) do
 		if child.Name == "Part" and child:IsA("BasePart") then
-			return child
+			local size = child.Size.X * child.Size.Y * child.Size.Z
+			if size > bestSize then
+				bestSize = size
+				best = child
+			end
 		end
 	end
-	return nil
+	return best
 end
 
 local function dbUpdateBallReference()
-	dbTargetBall = dbFindBall()
+	local current = dbTargetBall
+	if current and current:IsDescendantOf(Workspace) then
+		return
+	end
+	local closest = nil
+	local closestDist = math.huge
+	for _, child in pairs(Workspace:GetChildren()) do
+		if child.Name == "Part" and child:IsA("BasePart") then
+			local playerChar = LocalPlayer.Character
+			local playerPos = playerChar and playerChar:FindFirstChild("HumanoidRootPart")
+			if playerPos then
+				local dist = (child.Position - playerPos.Position).Magnitude
+				if dist < closestDist then
+					closestDist = dist
+					closest = child
+				end
+			else
+				closest = child
+				break
+			end
+		end
+	end
+	dbTargetBall = closest
 end
 
 local function dbCreateUI()
@@ -262,6 +290,11 @@ local autoBlockEnabled = false
 local autoBlockDistance = 12
 local autoBlockHysteresis = 2
 local autoBlockPressed = false
+local autoBlockSmoothDist = nil
+local autoBlockLockFrames = 0
+local autoBlockUnlockFrames = 0
+local autoBlockLockDebounce = 4
+local autoBlockUnlockDebounce = 2
 local statusLabel = nil
 local distanceLabel = nil
 local heartbeatConnection = nil
@@ -283,7 +316,7 @@ local function updateUI()
 
 	local character = LocalPlayer.Character
 	local rootPart = character and character:FindFirstChild("HumanoidRootPart")
-	local ball = findBall()
+	local ball = dbTargetBall
 
 	if not ball or not rootPart then
 		statusLabel.Text = "游戏未开始"
@@ -348,14 +381,33 @@ local function autoBlockPress()
 	end
 
 	local isLocked = ball.Highlight and ball.Highlight.FillColor ~= Color3.new(1, 1, 1)
-	local distance = (ball.Position - rootPart.Position).Magnitude
-	local shouldPress = isLocked and distance <= autoBlockDistance
+	local rawDistance = (ball.Position - rootPart.Position).Magnitude
+
+	-- 距离平滑：避免因球引用切换 / 抖动导致频繁切换
+	if not autoBlockSmoothDist or math.abs(autoBlockSmoothDist - rawDistance) > 4 then
+		autoBlockSmoothDist = rawDistance
+	else
+		autoBlockSmoothDist = 0.4 * rawDistance + 0.6 * autoBlockSmoothDist
+	end
+	local distance = autoBlockSmoothDist or rawDistance
+
+	-- 锁定/未锁定帧计数，避免抖动触发
+	if isLocked then
+		autoBlockLockFrames = autoBlockLockFrames + 1
+		autoBlockUnlockFrames = 0
+	else
+		autoBlockUnlockFrames = autoBlockUnlockFrames + 1
+		autoBlockLockFrames = 0
+	end
+
+	local shouldPress = isLocked and distance <= autoBlockDistance and autoBlockLockFrames >= autoBlockLockDebounce
 	local hysteresisDistance = autoBlockDistance + autoBlockHysteresis
+	local shouldRelease = not isLocked or distance > hysteresisDistance or autoBlockUnlockFrames < autoBlockUnlockDebounce
 
 	if shouldPress and not autoBlockPressed then
 		Services.VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.F, false, cloneref(game))
 		autoBlockPressed = true
-	elseif (not isLocked or distance > hysteresisDistance) and autoBlockPressed then
+	elseif not shouldPress and autoBlockPressed then
 		Services.VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.F, false, cloneref(game))
 		autoBlockPressed = false
 	end
@@ -364,6 +416,9 @@ end
 local function setAutoBlock(value)
 	autoBlockEnabled = value
 	autoBlockPressed = false
+	autoBlockSmoothDist = nil
+	autoBlockLockFrames = 0
+	autoBlockUnlockFrames = 0
 	if autoBlockConnection then
 		autoBlockConnection:Disconnect()
 		autoBlockConnection = nil
