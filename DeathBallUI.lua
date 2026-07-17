@@ -326,10 +326,11 @@ local function autoBlockPress()
 		return
 	end
 
-	local ball = findBall()
+	local ball = dbTargetBall
 	local character = LocalPlayer.Character
 	local rootPart = character and character:FindFirstChild("HumanoidRootPart")
-	if not ball or not rootPart then
+
+	if not ball or not ball:IsDescendantOf(Workspace) or not rootPart then
 		if autoBlockPressed then
 			Services.VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.F, false, cloneref(game))
 			autoBlockPressed = false
