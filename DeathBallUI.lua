@@ -37,44 +37,22 @@ local dbCharacter = nil
 local dbRootPart = nil
 
 local function dbFindBall()
-	local best = nil
-	local bestSize = 0
 	for _, child in pairs(Workspace:GetChildren()) do
 		if child.Name == "Part" and child:IsA("BasePart") then
 			local size = child.Size.X * child.Size.Y * child.Size.Z
-			if size > bestSize then
-				bestSize = size
-				best = child
+			if size > 5 and size < 5000 then
+				return child
 			end
 		end
 	end
-	return best
+	return nil
 end
 
 local function dbUpdateBallReference()
-	local current = dbTargetBall
-	if current and current:IsDescendantOf(Workspace) then
+	if dbTargetBall and dbTargetBall:IsDescendantOf(Workspace) then
 		return
 	end
-	local closest = nil
-	local closestDist = math.huge
-	for _, child in pairs(Workspace:GetChildren()) do
-		if child.Name == "Part" and child:IsA("BasePart") then
-			local playerChar = LocalPlayer.Character
-			local playerPos = playerChar and playerChar:FindFirstChild("HumanoidRootPart")
-			if playerPos then
-				local dist = (child.Position - playerPos.Position).Magnitude
-				if dist < closestDist then
-					closestDist = dist
-					closest = child
-				end
-			else
-				closest = child
-				break
-			end
-		end
-	end
-	dbTargetBall = closest
+	dbTargetBall = dbFindBall()
 end
 
 local function dbCreateUI()
@@ -214,7 +192,10 @@ function DeathBallScript:Enable()
 
 	table.insert(dbConnections, Workspace.ChildAdded:Connect(function(child)
 		if child.Name == "Part" and child:IsA("BasePart") then
-			dbTargetBall = child
+			local size = child.Size.X * child.Size.Y * child.Size.Z
+			if size > 5 and size < 5000 then
+				dbTargetBall = child
+			end
 		end
 	end))
 
@@ -295,6 +276,7 @@ local autoBlockLockFrames = 0
 local autoBlockUnlockFrames = 0
 local autoBlockLockDebounce = 4
 local autoBlockUnlockDebounce = 2
+local uiSmoothDistance = nil
 local statusLabel = nil
 local distanceLabel = nil
 local heartbeatConnection = nil
@@ -337,8 +319,13 @@ local function updateUI()
 	statusLabel.Text = isLocked and "已被球锁定" or "未被球锁定"
 	statusLabel.TextColor3 = isLocked and Color3.fromRGB(238, 17, 17) or Color3.fromRGB(17, 238, 17)
 
-	local distance = (ball.Position - rootPart.Position).Magnitude
-	distanceLabel.Text = string.format("%.0f", distance)
+	local rawDistance = (ball.Position - rootPart.Position).Magnitude
+	if not uiSmoothDistance or math.abs(uiSmoothDistance - rawDistance) > 5 then
+		uiSmoothDistance = rawDistance
+	else
+		uiSmoothDistance = 0.15 * rawDistance + 0.85 * uiSmoothDistance
+	end
+	distanceLabel.Text = string.format("%.0f", uiSmoothDistance or rawDistance)
 end
 
 local function doTeleport()
