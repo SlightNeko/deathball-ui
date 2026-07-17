@@ -261,8 +261,6 @@ local isEnabled = false
 local autoBlockEnabled = false
 local autoBlockDistance = 12
 local autoBlockHysteresis = 2
-local autoBlockCooldown = 0.5
-local autoBlockLastTime = 0
 local autoBlockPressed = false
 local statusLabel = nil
 local distanceLabel = nil
@@ -353,12 +351,8 @@ local function autoBlockPress()
 	local hysteresisDistance = autoBlockDistance + autoBlockHysteresis
 
 	if shouldPress and not autoBlockPressed then
-		local now = os.clock()
-		if now - autoBlockLastTime >= autoBlockCooldown then
-			autoBlockLastTime = now
-			Services.VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.F, false, cloneref(game))
-			autoBlockPressed = true
-		end
+		Services.VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.F, false, cloneref(game))
+		autoBlockPressed = true
 	elseif not shouldPress and distance > hysteresisDistance and autoBlockPressed then
 		Services.VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.F, false, cloneref(game))
 		autoBlockPressed = false
@@ -367,7 +361,6 @@ end
 
 local function setAutoBlock(value)
 	autoBlockEnabled = value
-	autoBlockLastTime = 0
 	autoBlockPressed = false
 	if autoBlockConnection then
 		autoBlockConnection:Disconnect()
@@ -382,7 +375,7 @@ end
 
 local function createWindow()
 	local isMobile = UserInputService.TouchEnabled and not UserInputService.MouseEnabled
-	local windowSize = isMobile and UDim2.new(0, 360, 0, 360) or UDim2.new(0, 420, 0, 340)
+	local windowSize = isMobile and UDim2.new(0, 360, 0, 320) or UDim2.new(0, 420, 0, 300)
 
 	windowData = ChronixUI:CreateWindow({
 		Name = "死亡球",
@@ -460,18 +453,6 @@ local function createWindow()
 			local value = tonumber(text)
 			if value and value > 0 then
 				autoBlockDistance = value
-			end
-		end,
-	})
-
-	mainTab:AddInput({
-		Label = "自动格挡冷却(秒)",
-		Default = tostring(autoBlockCooldown),
-		Placeholder = "冷却秒数",
-		Callback = function(text)
-			local value = tonumber(text)
-			if value and value > 0 then
-				autoBlockCooldown = value
 			end
 		end,
 	})
