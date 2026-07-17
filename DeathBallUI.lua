@@ -259,6 +259,7 @@ local ChronixUI = loadstring(game:HttpGet("https://raw.atomgit.com/Furrycalin/Ch
 local windowData = nil
 local isEnabled = false
 local autoBlockEnabled = false
+local autoBlockLastActive = false
 local statusLabel = nil
 local distanceLabel = nil
 local heartbeatConnection = nil
@@ -316,6 +317,7 @@ end
 
 local function setAutoBlock(value)
 	autoBlockEnabled = value
+	autoBlockLastActive = false
 	if autoBlockConnection then
 		autoBlockConnection:Disconnect()
 		autoBlockConnection = nil
@@ -336,9 +338,10 @@ local function setAutoBlock(value)
 				return
 			end
 			local isLocked = ball.Highlight and ball.Highlight.FillColor ~= Color3.new(1, 1, 1)
-			if isLocked then
+			if isLocked and not autoBlockLastActive then
 				doTeleport()
 			end
+			autoBlockLastActive = isLocked
 		end)
 	end
 end
@@ -390,6 +393,7 @@ local function createWindow()
 				end
 				setAutoBlock(false)
 				DeathBallScript:Disable()
+				autoBlockLastActive = false
 				if statusLabel then
 					statusLabel.Text = "状态：已关闭"
 					statusLabel.TextColor3 = Color3.fromRGB(230, 230, 250)
