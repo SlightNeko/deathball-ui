@@ -2,7 +2,6 @@
 --!optimize 2
 if not game:IsLoaded() then game.Loaded:Wait() end
 
--- 基础引用
 local cloneref = cloneref or clonereference or function(obj) return obj end
 Services = setmetatable({}, {
 	__index = function(self, name)
@@ -11,7 +10,7 @@ Services = setmetatable({}, {
 			rawset(self, name, cache)
 			return cache
 		else
-			error("无效服务: "..tostring(name))
+			error("Invalid service: "..tostring(name))
 		end
 	end
 })
@@ -19,7 +18,6 @@ Services = setmetatable({}, {
 local Players = Services.Players
 local Workspace = Services.Workspace
 local UserInputService = Services.UserInputService
-local ContextActionService = Services.ContextActionService
 local RunService = Services.RunService
 local LocalPlayer = Players.LocalPlayer
 
@@ -42,46 +40,39 @@ local function dbFindBall()
 	local playerChar = LocalPlayer.Character
 	local playerPos = playerChar and playerChar:FindFirstChild("HumanoidRootPart")
 
-	-- 优先：带 Highlight 的 Part（死亡球几乎一定有 Highlight）
-	local best = nil
-	local bestScore = -math.huge
-	for _, child in pairs(Workspace:GetChildren()) do
-		if child.Name == "Part" and child:IsA("BasePart") and child:FindFirstChildOfClass("Highlight") then
-			local dist = playerPos and (child.Position - playerPos.Position).Magnitude or math.huge
-			local score = 100000 - dist
-			if score > bestScore then
-				bestScore = score
-				best = child
-			end
-		end
-	end
-
-	-- 稳定性：如果新球和上一帧球距离太远，保持上一帧的球（避免在两个球之间跳变）
-	if best and dbPrevBall and dbPrevBall:IsDescendantOf(Workspace) then
-		local distBetween = (best.Position - dbPrevBall.Position).Magnitude
-		if distBetween > 40 then
-			best = dbPrevBall
-		end
-	end
-
-	-- 兜底：玩家附近最大的 Part（体积下限避免误认小零件）
-	if not best and playerPos then
-		local bestSize = 0
-		for _, child in pairs(Workspace:GetChildren()) do
-			if child.Name == "Part" and child:IsA("BasePart") then
-				local dist = (child.Position - playerPos.Position).Magnitude
-				if dist < 200 then
-					local size = child.Size.X * child.Size.Y * child.Size.Z
-					if size > bestSize then
-						bestSize = size
+	-- 优先：workspace.Balls 容器（Death Ball 正规球存放处）
+	local ballsFolder = Workspace:FindFirstChild("Balls")
+	if ballsFolder then
+		local best = nil
+		local bestScore = -math.huge
+		for _, child in pairs(ballsFolder:GetChildren()) do
+			if child:IsA("BasePart") then
+				local dist = playerPos and (child.Position - playerPos.Position).Magnitude or math.huge
+				local sizeVol = child.Size.X * child.Size.Y * child.Size.Z
+				-- 死亡球通常 > 1 stud 直径，且不会太小
+				if sizeVol > 0.5 then
+					local score = 100000 - dist + sizeVol * 10
+					if score > bestScore then
+						bestScore = score
 						best = child
 					end
 				end
 			end
 		end
+		if best then
+			return best
+		end
 	end
 
-	return best
+	-- 兜底：扫 Workspace 顶层，找带 Highlight 的 Part
+	for _, child in pairs(Workspace:GetChildren()) do
+		if child.Name == "Part" and child:IsA("BasePart") and child:FindFirstChildOfClass("Highlight") then
+			local dist = playerPos and (child.Position - playerPos.Position).Magnitude or math.huge
+			return child
+		end
+	end
+
+	return nil
 end
 
 local function dbUpdateBallReference()
@@ -92,6 +83,13 @@ local function dbUpdateBallReference()
 		end
 		local candidate = dbFindBall()
 		if candidate and candidate ~= dbTargetBall then
+			-- 新球和旧球距离太远时保持旧球，防止在两个球之间跳变
+			if dbPrevBall and dbPrevBall:IsDescendantOf(Workspace) then
+				local distBetween = (candidate.Position - dbPrevBall.Position).Magnitude
+				if distBetween > 30 then
+					return
+				end
+			end
 			dbTargetBall = candidate
 			dbBallSwitchCooldown = 10
 		end
@@ -318,6 +316,7 @@ local autoBlockDistance = 12
 local autoBlockHysteresis = 2
 local autoBlockPressed = false
 local autoBlockSmoothDist = nil
+local autoBlockSpeed = nil
 local autoBlockLockFrames = 0
 local autoBlockUnlockFrames = 0
 local autoBlockLockDebounce = 2
@@ -407,15 +406,35 @@ local function autoBlockPress()
 	local isLocked = ball.Highlight and ball.Highlight.FillColor ~= Color3.new(1, 1, 1)
 	local rawDistance = (ball.Position - rootPart.Position).Magnitude
 
-	-- 距离平滑：用于自动挡决策，更激进地跟随真实距离
+	-- 速度检测（时间判定核心）
+	local speed = 0
+	if ball:FindFirstChild("zoomies") and ball.zoomies:FindFirstChild("VectorVelocity") then
+		speed = ball.zoomies.VectorVelocity.Magnitude
+	elseif ball.AssemblyLinearVelocity then
+		speed = ball.AssemblyLinearVelocity.Magnitude
+	end
+
+	-- 平滑距离和速度
 	if not autoBlockSmoothDist or math.abs(autoBlockSmoothDist - rawDistance) > 3 then
 		autoBlockSmoothDist = rawDistance
 	else
 		autoBlockSmoothDist = 0.3 * rawDistance + 0.7 * autoBlockSmoothDist
 	end
-	local distance = autoBlockSmoothDist or rawDistance
+	if not autoBlockSpeed or math.abs(autoBlockSpeed - speed) > 5 then
+		autoBlockSpeed = speed
+	else
+		autoBlockSpeed = 0.3 * speed + 0.7 * autoBlockSpeed
+	end
 
-	-- 锁定/未锁定帧计数，避免抖动触发
+	local distance = autoBlockSmoothDist
+	local effectiveSpeed = autoBlockSpeed
+
+	-- 时间判定：Distance / Speed <= threshold（借鉴 Phantom 思路）
+	-- 速度太低时回退到纯距离判定，避免除以零或极慢球误判
+	local timeToHit = effectiveSpeed > 0.5 and distance / effectiveSpeed or math.huge
+	local distanceThreshold = autoBlockDistance
+
+	-- 锁定/未锁定帧计数
 	if isLocked then
 		autoBlockLockFrames = autoBlockLockFrames + 1
 		autoBlockUnlockFrames = 0
@@ -424,11 +443,12 @@ local function autoBlockPress()
 		autoBlockLockFrames = 0
 	end
 
-	-- 自动挡逻辑：锁定 + 距离足够近 + 锁定持续帧数满足 -> 按 F
-	-- 解锁 + 距离超出门槛 + 未锁定持续帧数满足 -> 松 F
-	local shouldPress = isLocked and distance <= autoBlockDistance and autoBlockLockFrames >= autoBlockLockDebounce
-	local hysteresisDistance = autoBlockDistance + autoBlockHysteresis
-	local shouldRelease = not isLocked or distance > hysteresisDistance or autoBlockUnlockFrames >= autoBlockUnlockDebounce
+	-- 自动挡逻辑：
+	-- 1. 锁定 + (距离足够近 OR 时间足够近) -> 按 F
+	-- 2. 解锁 + 距离超出 + 未锁定持续帧数满足 -> 松 F
+	local shouldPress = isLocked and (distance <= distanceThreshold or timeToHit <= 0.55) and autoBlockLockFrames >= autoBlockLockDebounce
+	local hysteresisDist = distanceThreshold + autoBlockHysteresis
+	local shouldRelease = not isLocked or (distance > hysteresisDist and timeToHit > 0.7) or autoBlockUnlockFrames >= autoBlockUnlockDebounce
 
 	if shouldPress and not autoBlockPressed then
 		Services.VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.F, false, cloneref(game))
@@ -443,6 +463,7 @@ local function setAutoBlock(value)
 	autoBlockEnabled = value
 	autoBlockPressed = false
 	autoBlockSmoothDist = nil
+	autoBlockSpeed = nil
 	autoBlockLockFrames = 0
 	autoBlockUnlockFrames = 0
 	uiSmoothDistance = nil
