@@ -32,24 +32,69 @@ local dbMainGui = nil
 local dbStatusText = nil
 local dbDistanceText = nil
 local dbTargetBall = nil
+local dbPrevBall = nil
+local dbBallSwitchCooldown = 0
 local dbIsEnabled = false
 local dbCharacter = nil
 local dbRootPart = nil
 
 local function dbFindBall()
+	local playerChar = LocalPlayer.Character
+	local playerPos = playerChar and playerChar:FindFirstChild("HumanoidRootPart")
+
+	-- 优先：带 Highlight 的 Part（死亡球几乎一定有 Highlight）
+	local best = nil
+	local bestScore = -math.huge
 	for _, child in pairs(Workspace:GetChildren()) do
-		if child.Name == "Part" and child:IsA("BasePart") then
-			local size = child.Size.X * child.Size.Y * child.Size.Z
-			if size > 5 and size < 5000 then
-				return child
+		if child.Name == "Part" and child:IsA("BasePart") and child:FindFirstChildOfClass("Highlight") then
+			local dist = playerPos and (child.Position - playerPos.Position).Magnitude or math.huge
+			local score = 100000 - dist
+			if score > bestScore then
+				bestScore = score
+				best = child
 			end
 		end
 	end
-	return nil
+
+	-- 稳定性：如果新球和上一帧球距离太远，保持上一帧的球（避免在两个球之间跳变）
+	if best and dbPrevBall and dbPrevBall:IsDescendantOf(Workspace) then
+		local distBetween = (best.Position - dbPrevBall.Position).Magnitude
+		if distBetween > 40 then
+			best = dbPrevBall
+		end
+	end
+
+	-- 兜底：玩家附近最大的 Part（体积下限避免误认小零件）
+	if not best and playerPos then
+		local bestSize = 0
+		for _, child in pairs(Workspace:GetChildren()) do
+			if child.Name == "Part" and child:IsA("BasePart") then
+				local dist = (child.Position - playerPos.Position).Magnitude
+				if dist < 200 then
+					local size = child.Size.X * child.Size.Y * child.Size.Z
+					if size > bestSize then
+						bestSize = size
+						best = child
+					end
+				end
+			end
+		end
+	end
+
+	return best
 end
 
 local function dbUpdateBallReference()
 	if dbTargetBall and dbTargetBall:IsDescendantOf(Workspace) then
+		if dbBallSwitchCooldown > 0 then
+			dbBallSwitchCooldown = dbBallSwitchCooldown - 1
+			return
+		end
+		local candidate = dbFindBall()
+		if candidate and candidate ~= dbTargetBall then
+			dbTargetBall = candidate
+			dbBallSwitchCooldown = 10
+		end
 		return
 	end
 	dbTargetBall = dbFindBall()
@@ -215,6 +260,7 @@ function DeathBallScript:Enable()
 
 	table.insert(dbConnections, RunService.Heartbeat:Connect(function()
 		if dbIsEnabled then
+			dbPrevBall = dbTargetBall
 			dbUpdateUI()
 		end
 	end))
@@ -274,22 +320,13 @@ local autoBlockPressed = false
 local autoBlockSmoothDist = nil
 local autoBlockLockFrames = 0
 local autoBlockUnlockFrames = 0
-local autoBlockLockDebounce = 4
+local autoBlockLockDebounce = 2
 local autoBlockUnlockDebounce = 2
 local uiSmoothDistance = nil
 local statusLabel = nil
 local distanceLabel = nil
 local heartbeatConnection = nil
 local autoBlockConnection = nil
-
-local function findBall()
-	for _, child in pairs(Workspace:GetChildren()) do
-		if child.Name == "Part" and child:IsA("BasePart") then
-			return child
-		end
-	end
-	return nil
-end
 
 local function updateUI()
 	if not statusLabel or not distanceLabel then
@@ -320,10 +357,10 @@ local function updateUI()
 	statusLabel.TextColor3 = isLocked and Color3.fromRGB(238, 17, 17) or Color3.fromRGB(17, 238, 17)
 
 	local rawDistance = (ball.Position - rootPart.Position).Magnitude
-	if not uiSmoothDistance or math.abs(uiSmoothDistance - rawDistance) > 5 then
+	if not uiSmoothDistance or math.abs(uiSmoothDistance - rawDistance) > 3 then
 		uiSmoothDistance = rawDistance
 	else
-		uiSmoothDistance = 0.15 * rawDistance + 0.85 * uiSmoothDistance
+		uiSmoothDistance = 0.2 * rawDistance + 0.8 * uiSmoothDistance
 	end
 	distanceLabel.Text = string.format("%.0f", uiSmoothDistance or rawDistance)
 end
@@ -370,11 +407,11 @@ local function autoBlockPress()
 	local isLocked = ball.Highlight and ball.Highlight.FillColor ~= Color3.new(1, 1, 1)
 	local rawDistance = (ball.Position - rootPart.Position).Magnitude
 
-	-- 距离平滑：避免因球引用切换 / 抖动导致频繁切换
-	if not autoBlockSmoothDist or math.abs(autoBlockSmoothDist - rawDistance) > 4 then
+	-- 距离平滑：用于自动挡决策，更激进地跟随真实距离
+	if not autoBlockSmoothDist or math.abs(autoBlockSmoothDist - rawDistance) > 3 then
 		autoBlockSmoothDist = rawDistance
 	else
-		autoBlockSmoothDist = 0.4 * rawDistance + 0.6 * autoBlockSmoothDist
+		autoBlockSmoothDist = 0.3 * rawDistance + 0.7 * autoBlockSmoothDist
 	end
 	local distance = autoBlockSmoothDist or rawDistance
 
@@ -387,14 +424,16 @@ local function autoBlockPress()
 		autoBlockLockFrames = 0
 	end
 
+	-- 自动挡逻辑：锁定 + 距离足够近 + 锁定持续帧数满足 -> 按 F
+	-- 解锁 + 距离超出门槛 + 未锁定持续帧数满足 -> 松 F
 	local shouldPress = isLocked and distance <= autoBlockDistance and autoBlockLockFrames >= autoBlockLockDebounce
 	local hysteresisDistance = autoBlockDistance + autoBlockHysteresis
-	local shouldRelease = not isLocked or distance > hysteresisDistance or autoBlockUnlockFrames < autoBlockUnlockDebounce
+	local shouldRelease = not isLocked or distance > hysteresisDistance or autoBlockUnlockFrames >= autoBlockUnlockDebounce
 
 	if shouldPress and not autoBlockPressed then
 		Services.VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.F, false, cloneref(game))
 		autoBlockPressed = true
-	elseif not shouldPress and autoBlockPressed then
+	elseif shouldRelease and autoBlockPressed then
 		Services.VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.F, false, cloneref(game))
 		autoBlockPressed = false
 	end
@@ -406,6 +445,7 @@ local function setAutoBlock(value)
 	autoBlockSmoothDist = nil
 	autoBlockLockFrames = 0
 	autoBlockUnlockFrames = 0
+	uiSmoothDistance = nil
 	if autoBlockConnection then
 		autoBlockConnection:Disconnect()
 		autoBlockConnection = nil
