@@ -39,40 +39,60 @@ local dbRootPart = nil
 local function dbFindBall()
 	local playerChar = LocalPlayer.Character
 	local playerPos = playerChar and playerChar:FindFirstChild("HumanoidRootPart")
+	local candidates = {}
 
-	-- 优先：workspace.Balls 容器（Death Ball 正规球存放处）
+	-- 策略1：workspace.Balls 容器（Death Ball 最常见）
 	local ballsFolder = Workspace:FindFirstChild("Balls")
 	if ballsFolder then
-		local best = nil
-		local bestScore = -math.huge
 		for _, child in pairs(ballsFolder:GetChildren()) do
 			if child:IsA("BasePart") then
-				local dist = playerPos and (child.Position - playerPos.Position).Magnitude or math.huge
-				local sizeVol = child.Size.X * child.Size.Y * child.Size.Z
-				-- 死亡球通常 > 1 stud 直径，且不会太小
-				if sizeVol > 0.5 then
-					local score = 100000 - dist + sizeVol * 10
-					if score > bestScore then
-						bestScore = score
-						best = child
-					end
+				table.insert(candidates, child)
+			end
+		end
+	end
+
+	-- 策略2：workspace 顶层名字含 Ball 的 BasePart
+	for _, child in pairs(Workspace:GetChildren()) do
+		if child:IsA("BasePart") and (child.Name:find("Ball", 1, true) or child.Name:find("ball", 1, true)) then
+			table.insert(candidates, child)
+		end
+	end
+
+	-- 策略3：带 Highlight 且明显在移动的 BasePart（过滤大厅静止装饰）
+	for _, child in pairs(Workspace:GetChildren()) do
+		if child:IsA("BasePart") and child:FindFirstChildOfClass("Highlight") then
+			local vel = child.AssemblyLinearVelocity
+			if vel and vel.Magnitude > 0.5 then
+				local already = false
+				for _, c in ipairs(candidates) do
+					if c == child then already = true; break end
+				end
+				if not already then
+					table.insert(candidates, child)
 				end
 			end
 		end
-		if best then
-			return best
+	end
+
+	-- 评分：realBall 属性 > 速度快 > 距离近 > 体积大 > 有 Highlight
+	local best = nil
+	local bestScore = -math.huge
+	for _, child in pairs(candidates) do
+		local dist = playerPos and (child.Position - playerPos.Position).Magnitude or math.huge
+		local sizeVol = child.Size.X * child.Size.Y * child.Size.Z
+		local vel = child.AssemblyLinearVelocity
+		local speed = vel and vel.Magnitude or 0
+		local isRealBall = child:GetAttribute("realBall") and 10000 or 0
+		local speedBonus = math.min(speed * 5, 5000)
+		local hasHighlight = child:FindFirstChildOfClass("Highlight") and 2000 or 0
+		local score = 100000 - dist * 10 + sizeVol + isRealBall + speedBonus + hasHighlight
+		if score > bestScore then
+			bestScore = score
+			best = child
 		end
 	end
 
-	-- 兜底：扫 Workspace 顶层，找带 Highlight 的 Part
-	for _, child in pairs(Workspace:GetChildren()) do
-		if child.Name == "Part" and child:IsA("BasePart") and child:FindFirstChildOfClass("Highlight") then
-			local dist = playerPos and (child.Position - playerPos.Position).Magnitude or math.huge
-			return child
-		end
-	end
-
-	return nil
+	return best
 end
 
 local function dbUpdateBallReference()
