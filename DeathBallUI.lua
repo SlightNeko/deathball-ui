@@ -259,7 +259,11 @@ local ChronixUI = loadstring(game:HttpGet("https://raw.atomgit.com/Furrycalin/Ch
 local windowData = nil
 local isEnabled = false
 local autoBlockEnabled = false
-local autoBlockLastActive = false
+local autoBlockDistance = 12
+local autoBlockHysteresis = 2
+local autoBlockCooldown = 0.5
+local autoBlockLastTime = 0
+local autoBlockPressed = false
 local statusLabel = nil
 local distanceLabel = nil
 local heartbeatConnection = nil
@@ -315,40 +319,70 @@ local function doTeleport()
 	end)
 end
 
+local function autoBlockPress()
+	if not isEnabled or not autoBlockEnabled then
+		if autoBlockPressed then
+			Services.VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.F, false, cloneref(game))
+			autoBlockPressed = false
+		end
+		return
+	end
+
+	local ball = findBall()
+	local character = LocalPlayer.Character
+	local rootPart = character and character:FindFirstChild("HumanoidRootPart")
+	if not ball or not rootPart then
+		if autoBlockPressed then
+			Services.VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.F, false, cloneref(game))
+			autoBlockPressed = false
+		end
+		return
+	end
+
+	local isSpectating = rootPart.Position.Z < -767.55 and rootPart.Position.Y > 279.17
+	if isSpectating then
+		if autoBlockPressed then
+			Services.VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.F, false, cloneref(game))
+			autoBlockPressed = false
+		end
+		return
+	end
+
+	local distance = (ball.Position - rootPart.Position).Magnitude
+	local shouldPress = distance <= autoBlockDistance
+	local hysteresisDistance = autoBlockDistance + autoBlockHysteresis
+
+	if shouldPress and not autoBlockPressed then
+		local now = os.clock()
+		if now - autoBlockLastTime >= autoBlockCooldown then
+			autoBlockLastTime = now
+			Services.VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.F, false, cloneref(game))
+			autoBlockPressed = true
+		end
+	elseif not shouldPress and distance > hysteresisDistance and autoBlockPressed then
+		Services.VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.F, false, cloneref(game))
+		autoBlockPressed = false
+	end
+end
+
 local function setAutoBlock(value)
 	autoBlockEnabled = value
-	autoBlockLastActive = false
+	autoBlockLastTime = 0
+	autoBlockPressed = false
 	if autoBlockConnection then
 		autoBlockConnection:Disconnect()
 		autoBlockConnection = nil
 	end
 	if autoBlockEnabled then
 		autoBlockConnection = RunService.Heartbeat:Connect(function()
-			if not isEnabled or not autoBlockEnabled then
-				return
-			end
-			local ball = findBall()
-			local character = LocalPlayer.Character
-			local rootPart = character and character:FindFirstChild("HumanoidRootPart")
-			if not ball or not rootPart then
-				return
-			end
-			local isSpectating = rootPart.Position.Z < -767.55 and rootPart.Position.Y > 279.17
-			if isSpectating then
-				return
-			end
-			local isLocked = ball.Highlight and ball.Highlight.FillColor ~= Color3.new(1, 1, 1)
-			if isLocked and not autoBlockLastActive then
-				doTeleport()
-			end
-			autoBlockLastActive = isLocked
+			autoBlockPress()
 		end)
 	end
 end
 
 local function createWindow()
 	local isMobile = UserInputService.TouchEnabled and not UserInputService.MouseEnabled
-	local windowSize = isMobile and UDim2.new(0, 360, 0, 320) or UDim2.new(0, 420, 0, 300)
+	local windowSize = isMobile and UDim2.new(0, 360, 0, 360) or UDim2.new(0, 420, 0, 340)
 
 	windowData = ChronixUI:CreateWindow({
 		Name = "死亡球",
@@ -360,7 +394,7 @@ local function createWindow()
 	mainTab:AddTitle("死亡球")
 	mainTab:AddParagraph({
 		Title = "说明",
-		Content = "开启后按 R 反弹死亡球，也可点击按钮反弹。开启自动格挡会在被锁定时自动反弹。",
+		Content = "开启后按 R 反弹死亡球，也可点击按钮反弹。开启自动格挡会在球靠近时自动按住 F，不会移动角色。",
 	})
 
 	statusLabel = mainTab:AddLabel("状态：未开启")
@@ -393,7 +427,6 @@ local function createWindow()
 				end
 				setAutoBlock(false)
 				DeathBallScript:Disable()
-				autoBlockLastActive = false
 				if statusLabel then
 					statusLabel.Text = "状态：已关闭"
 					statusLabel.TextColor3 = Color3.fromRGB(230, 230, 250)
@@ -412,10 +445,34 @@ local function createWindow()
 	})
 
 	mainTab:AddToggle({
-		Label = "自动格挡",
+		Label = "自动格挡(靠近自动按F)",
 		Default = false,
 		Callback = function(value)
 			setAutoBlock(value)
+		end,
+	})
+
+	mainTab:AddInput({
+		Label = "自动格挡距离",
+		Default = tostring(autoBlockDistance),
+		Placeholder = "触发距离(Studios)",
+		Callback = function(text)
+			local value = tonumber(text)
+			if value and value > 0 then
+				autoBlockDistance = value
+			end
+		end,
+	})
+
+	mainTab:AddInput({
+		Label = "自动格挡冷却(秒)",
+		Default = tostring(autoBlockCooldown),
+		Placeholder = "冷却秒数",
+		Callback = function(text)
+			local value = tonumber(text)
+			if value and value > 0 then
+				autoBlockCooldown = value
+			end
 		end,
 	})
 
