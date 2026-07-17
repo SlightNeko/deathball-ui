@@ -347,14 +347,15 @@ local function autoBlockPress()
 		return
 	end
 
+	local isLocked = ball.Highlight and ball.Highlight.FillColor ~= Color3.new(1, 1, 1)
 	local distance = (ball.Position - rootPart.Position).Magnitude
-	local shouldPress = distance <= autoBlockDistance
+	local shouldPress = isLocked and distance <= autoBlockDistance
 	local hysteresisDistance = autoBlockDistance + autoBlockHysteresis
 
 	if shouldPress and not autoBlockPressed then
 		Services.VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.F, false, cloneref(game))
 		autoBlockPressed = true
-	elseif not shouldPress and distance > hysteresisDistance and autoBlockPressed then
+	elseif (not isLocked or distance > hysteresisDistance) and autoBlockPressed then
 		Services.VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.F, false, cloneref(game))
 		autoBlockPressed = false
 	end
